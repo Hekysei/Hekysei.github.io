@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>QR Scanner</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: white;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #container {
+            position: relative;
+            flex-grow: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none;
+        }
+
+        .scanner-rect {
+            width: 70vw;
+            height: 70vw;
+            max-width: 300px;
+            max-height: 300px;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 20px;
+            box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.5);
+            position: relative;
+        }
+
+        .scanner-rect::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: #00ff00;
+            box-shadow: 0 0 10px #00ff00;
+            animation: scan 2s linear infinite;
+        }
+
+        @keyframes scan {
+            0% { top: 0; }
+            50% { top: 100%; }
+            100% { top: 0; }
+        }
+
+        #ui {
+            position: absolute;
+            bottom: 40px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            pointer-events: auto;
+        }
+
+        #result {
+            background: rgba(255, 255, 255, 0.9);
+            color: #000;
+            padding: 15px 25px;
+            border-radius: 12px;
+            display: none;
+            max-width: 80%;
+            word-break: break-all;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        #result a {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        button {
+            background: #fff;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #000;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            display: none;
+        }
+
+        #zoom-container {
+            width: 80%;
+            display: none;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 10px;
+        }
+
+        #zoom-slider {
+            width: 100%;
+            accent-color: #fff;
+        }
+
+        .error {
+            padding: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="video" autoplay playsinline></video>
+        <div id="overlay">
+            <div class="scanner-rect"></div>
+        </div>
+        <div id="ui">
+            <div id="zoom-container">
+                <input type="range" id="zoom-slider" min="1" max="10" step="0.1" value="1">
+            </div>
+            <div id="result"></div>
+            <button id="retry-btn">Повторить</button>
+        </div>
+    </div>
+    <canvas id="canvas" style="display: none;"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const resultDiv = document.getElementById('result');
+        const retryBtn = document.getElementById('retry-btn');
+        const zoomContainer = document.getElementById('zoom-container');
+        const zoomSlider = document.getElementById('zoom-slider');
+        const overlay = document.getElementById('overlay');
+
+        let scanning = true;
+        let track = null;
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+                });
+                video.srcObject = stream;
+                track = stream.getVideoTracks()[0];
+                
+                // Zoom support
+                const capabilities = track.getCapabilities();
+                if (capabilities.zoom) {
+                    zoomContainer.style.display = 'block';
+                    zoomSlider.min = capabilities.zoom.min;
+                    zoomSlider.max = capabilities.zoom.max;
+                    zoomSlider.step = capabilities.zoom.step || 0.1;
+                    zoomSlider.value = capabilities.zoom.min;
+                    
+                    zoomSlider.oninput = () => {
+                        track.applyConstraints({ advanced: [{ zoom: zoomSlider.value }] });
+                    };
+                }
+
+                requestAnimationFrame(scan);
+            } catch (err) {
+                document.body.innerHTML = `<div class="error">Ошибка доступа к камере: ${err.message}</div>`;
+            }
+        }
+
+        function scan() {
+            if (!scanning) return;
+
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                
+                // Pre-processing: Red channel contrast stretching
+                imageData = preprocess(imageData);
+                
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: "dontInvert",
+                });
+
+                if (code) {
+                    showResult(code.data);
+                    return;
+                }
+            }
+            requestAnimationFrame(scan);
+        }
+
+        function preprocess(imageData) {
+            const data = imageData.data;
+            const len = data.length;
+            
+            // Find min/max in red channel
+            let min = 255, max = 0;
+            for (let i = 0; i < len; i += 4) {
+                const r = data[i];
+                if (r < min) min = r;
+                if (r > max) max = r;
+            }
+            
+            const range = max - min;
+            if (range > 15) { // Only if there is some dynamic range
+                for (let i = 0; i < len; i += 4) {
+                    const r = data[i];
+                    const val = ((r - min) / range) * 255;
+                    data[i] = val;
+                    data[i+1] = val;
+                    data[i+2] = val;
+                    // Keep alpha
+                }
+            }
+            return imageData;
+        }
+
+        function showResult(url) {
+            scanning = false;
+            resultDiv.innerHTML = `Найдена ссылка:<br><a href="${url}" target="_blank">${url}</a>`;
+            resultDiv.style.display = 'block';
+            retryBtn.style.display = 'block';
+            overlay.style.display = 'none';
+            
+            // Send to server placeholder
+            console.log("Sending to server:", url);
+            // fetch('/api/save-scan', { method: 'POST', body: JSON.stringify({ url }) });
+        }
+
+        retryBtn.onclick = () => {
+            scanning = true;
+            resultDiv.style.display = 'none';
+            retryBtn.style.display = 'none';
+            overlay.style.display = 'flex';
+            requestAnimationFrame(scan);
+        };
+
+        startCamera();
+    </script>
+</body>
+</html>

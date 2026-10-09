@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <title>QR Scanner</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d10;
+      --panel: #14171c;
+      --line: #292e36;
+      --text: #f3f5f7;
+      --muted: #9ba3af;
+      --accent: #78e0b0;
+      --danger: #ff9b9b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+    body {
+      min-height: 100dvh;
+      font: 16px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      justify-content: center;
+    }
+    button, input { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+    .app {
+      width: min(100%, 560px);
+      min-height: 100dvh;
+      padding: max(20px, env(safe-area-inset-top)) 18px max(22px, env(safe-area-inset-bottom));
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .brand { display: flex; flex-direction: column; gap: 2px; }
+    h1 { font-size: 21px; line-height: 1.2; margin: 0; letter-spacing: -.035em; }
+    .subtitle { color: var(--muted); font-size: 13px; }
+    .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 6px; vertical-align: 1px; }
+    .stage {
+      position: relative;
+      overflow: hidden;
+      background: #050607;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      width: 100%;
+      aspect-ratio: 4 / 5;
+      max-height: 62dvh;
+      min-height: 260px;
+      display: grid;
+      place-items: center;
+    }
+    video { width: 100%; height: 100%; display: block; object-fit: cover; background: #050607; }
+    .placeholder {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px;
+      padding: 28px; text-align: center; color: var(--muted); pointer-events: none;
+    }
+    .placeholder svg { width: 48px; height: 48px; opacity: .78; }
+    .frame { position: absolute; width: min(62%, 255px); aspect-ratio: 1; pointer-events: none; opacity: .94; }
+    .frame span { position: absolute; width: 29px; height: 29px; border-color: var(--accent); border-style: solid; }
+    .frame span:nth-child(1) { top: 0; left: 0; border-width: 3px 0 0 3px; border-radius: 9px 0 0 0; }
+    .frame span:nth-child(2) { top: 0; right: 0; border-width: 3px 3px 0 0; border-radius: 0 9px 0 0; }
+    .frame span:nth-child(3) { bottom: 0; left: 0; border-width: 0 0 3px 3px; border-radius: 0 0 0 9px; }
+    .frame span:nth-child(4) { bottom: 0; right: 0; border-width: 0 3px 3px 0; border-radius: 0 0 9px 0; }
+    .scan-status { min-height: 24px; margin-top: -6px; text-align: center; color: var(--muted); font-size: 14px; }
+    .controls { display: flex; flex-direction: column; gap: 14px; }
+    .zoom-row { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; }
+    .zoom-row label, .zoom-value { font-size: 13px; color: var(--muted); white-space: nowrap; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); min-width: 50px; }
+    .zoom-value { min-width: 38px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+    .btn {
+      border: 1px solid transparent; border-radius: 15px; min-height: 52px; padding: 13px 18px;
+      cursor: pointer; font-weight: 650; transition: opacity .15s ease, transform .15s ease;
+    }
+    .btn:active { transform: scale(.99); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { color: #092016; background: var(--accent); }
+    .btn-secondary { color: var(--text); background: var(--panel); border-color: var(--line); }
+    .result { display: flex; flex-direction: column; gap: 12px; padding: 17px; border: 1px solid var(--line); background: var(--panel); border-radius: 18px; }
+    .result-top { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
+    .check { display: inline-grid; place-items: center; width: 23px; height: 23px; background: #234d3a; color: var(--accent); border-radius: 50%; font-size: 14px; }
+    .qr-content { overflow-wrap: anywhere; font-size: 14px; color: var(--text); }
+    .qr-link { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+    .qr-link:hover { text-decoration: underline; }
+    .result-actions { display: flex; gap: 10px; }
+    .result-actions .btn { flex: 1; min-height: 46px; padding: 10px 13px; font-size: 14px; }
+    .error { color: var(--danger); font-size: 13px; text-align: center; }
+    .hidden { display: none !important; }
+    .footnote { margin-top: auto; color: #737c88; font-size: 12px; text-align: center; padding-top: 4px; }
+    @media (min-height: 800px) { .stage { max-height: 57dvh; } }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="brand">
+        <h1>QR Scanner</h1>
+        <div class="subtitle">Сканирование на устройстве</div>
+      </div>
+      <div id="liveLabel" class="subtitle">Готов к запуску</div>
+    </header>
+
+    <section id="stage" class="stage" aria-label="Изображение с камеры">
+      <video id="video" autoplay muted playsinline class="hidden"></video>
+      <div id="placeholder" class="placeholder">
+        <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <path d="M6 18V8a2 2 0 0 1 2-2h10M30 6h10a2 2 0 0 1 2 2v10M42 30v10a2 2 0 0 1-2 2H30M18 42H8a2 2 0 0 1-2-2V30" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M14 14h8v8h-8zM26 14h8v8h-8zM14 26h8v8h-8zM28 28h3v3h-3zM34 32v2M26 34h4M34 26h2v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>Наведите камеру на QR-код<br>на экране проектора</div>
+      </div>
+      <div id="frame" class="frame hidden" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    </section>
+
+    <div id="status" class="scan-status" role="status" aria-live="polite">Нажмите кнопку, чтобы включить камеру</div>
+
+    <section id="controls" class="controls">
+      <div class="zoom-row">
+        <label for="zoom">Зум</label>
+        <input id="zoom" type="range" min="1" max="3" step="0.1" value="1" disabled>
+        <button id="zoomMinus" class="btn btn-secondary" type="button" aria-label="Уменьшить зум" style="min-height:36px;padding:4px 11px;border-radius:11px">−</button>
+        <div id="zoomValue" class="zoom-value">1.0×</div>
+      </div>
+      <button id="startBtn" class="btn btn-primary" type="button">Включить камеру</button>
+      <div id="error" class="error hidden"></div>
+    </section>
+
+    <section id="result" class="result hidden" aria-live="polite">
+      <div class="result-top"><span class="check">✓</span><span>QR-код распознан</span></div>
+      <div id="resultContent" class="qr-content"></div>
+      <div class="result-actions">
+        <button id="openBtn" class="btn btn-primary hidden" type="button">Открыть ссылку ↗</button>
+        <button id="copyBtn" class="btn btn-secondary" type="button">Копировать</button>
+      </div>
+      <button id="retryBtn" class="btn btn-secondary" type="button">Повторить сканирование</button>
+    </section>
+
+    <div class="footnote">Камера и распознавание работают в браузере. Изображение никуда не отправляется.</div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <script>
+    (() => {
+      const video = document.getElementById('video');
+      const placeholder = document.getElementById('placeholder');
+      const frame = document.getElementById('frame');
+      const statusEl = document.getElementById('status');
+      const liveLabel = document.getElementById('liveLabel');
+      const startBtn = document.getElementById('startBtn');
+      const retryBtn = document.getElementById('retryBtn');
+      const controls = document.getElementById('controls');
+      const resultSection = document.getElementById('result');
+      const resultContent = document.getElementById('resultContent');
+      const openBtn = document.getElementById('openBtn');
+      const copyBtn = document.getElementById('copyBtn');
+      const errorEl = document.getElementById('error');
+      const zoomSlider = document.getElementById('zoom');
+      const zoomValue = document.getElementById('zoomValue');
+      const zoomMinus = document.getElementById('zoomMinus');
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      let stream = null;
+      let track = null;
+      let scanTimer = 0;
+      let lastAttempt = 0;
+      let scanning = false;
+      let detectedText = '';
+      let detectedUrl = null;
+      let hardwareZoom = false;
+      let digitalZoom = 1;
+      let activeZoom = 1;
+
+      function setStatus(text) { statusEl.textContent = text; }
+      function setError(text) {
+        errorEl.textContent = text || '';
+        errorEl.classList.toggle('hidden', !text);
+      }
+      function stopCamera() {
+        scanning = false;
+        if (scanTimer) cancelAnimationFrame(scanTimer);
+        scanTimer = 0;
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        stream = null;
+        track = null;
+        video.pause();
+        video.srcObject = null;
+        video.style.transform = '';
+        video.classList.add('hidden');
+        placeholder.classList.remove('hidden');
+        frame.classList.add('hidden');
+        zoomSlider.disabled = true;
+        liveLabel.textContent = 'Камера выключена';
+      }
+
+      function clearResult() {
+        detectedText = '';
+        detectedUrl = null;
+        resultSection.classList.add('hidden');
+        resultContent.replaceChildren();
+        openBtn.classList.add('hidden');
+        setError('');
+      }
+
+      async function startCamera() {
+        clearResult();
+        setError('');
+        startBtn.disabled = true;
+        setStatus('Запрашиваем доступ к камере…');
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('Этот браузер не поддерживает камеру. Откройте страницу в современном браузере по HTTPS.');
+          }
+          stopCamera();
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 }
+            }
+          });
+          track = stream.getVideoTracks()[0];
+          video.srcObject = stream;
+          video.classList.remove('hidden');
+          placeholder.classList.add('hidden');
+          frame.classList.remove('hidden');
+          await video.play();
+          setupZoom();
+          scanning = true;
+          liveLabel.innerHTML = '<span class="live-dot"></span>Сканирование';
+          setStatus('Наведите камеру на QR-код');
+          startBtn.textContent = 'Остановить камеру';
+          startBtn.disabled = false;
+          updateZoomUi();
+          scanTimer = requestAnimationFrame(scanLoop);
+        } catch (err) {
+          stopCamera();
+          startBtn.textContent = 'Включить камеру';
+          startBtn.disabled = false;
+          const messages = {
+            NotAllowedError: 'Нет доступа к камере. Разрешите доступ в настройках браузера.',
+            NotFoundError: 'Камера не найдена на этом устройстве.',
+            NotReadableError: 'Камера занята другим приложением. Закройте его и попробуйте снова.'
+          };
+          setError(messages[err.name] || err.message || 'Не удалось запустить камеру.');
+          setStatus('Камера не запущена');
+        }
+      }
+
+      function stopByButton() {
+        stopCamera();
+        startBtn.textContent = 'Включить камеру';
+        startBtn.disabled = false;
+        setStatus('Сканирование остановлено');
+      }
+
+      function setupZoom() {
+        hardwareZoom = false;
+        digitalZoom = 1;
+        activeZoom = 1;
+        zoomSlider.min = '1';
+        zoomSlider.max = '3';
+        zoomSlider.step = '0.1';
+        zoomSlider.value = '1';
+        try {
+          const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+          if (caps.zoom && typeof caps.zoom === 'object') {
+            hardwareZoom = true;
+            zoomSlider.min = String(Math.max(1, caps.zoom.min || 1));
+            zoomSlider.max = String(Math.min(5, caps.zoom.max || 3));
+            zoomSlider.step = String(caps.zoom.step || 0.1);
+            const settings = track.getSettings ? track.getSettings() : {};
+            activeZoom = settings.zoom || 1;
+            zoomSlider.value = String(activeZoom);
+          }
+        } catch (_) { hardwareZoom = false; }
+        zoomSlider.disabled = false;
+        updateZoomUi();
+      }
+
+      async function setZoom(value) {
+        const min = Number(zoomSlider.min) || 1;
+        const max = Number(zoomSlider.max) || 3;
+        value = Math.max(min, Math.min(max, Number(value)));
+        activeZoom = value;
+        if (hardwareZoom && track) {
+          try {
+            await track.applyConstraints({ advanced: [{ zoom: value }] });
+            video.style.transform = '';
+            digitalZoom = 1;
+          } catch (_) {
+            hardwareZoom = false;
+            digitalZoom = value;
+            video.style.transform = `scale(${value})`;
+          }
+        } else {
+          digitalZoom = value;
+          video.style.transform = `scale(${value})`;
+        }
+        updateZoomUi();
+      }
+
+      function updateZoomUi() {
+        zoomValue.textContent = `${activeZoom.toFixed(1)}×`;
+        zoomSlider.value = String(activeZoom);
+        zoomMinus.disabled = !scanning || activeZoom <= Number(zoomSlider.min) + 0.001;
+      }
+
+      function makeGray(data, w, h, contrast) {
+        const gray = new Uint8ClampedArray(data.length);
+        const hist = new Uint32Array(256);
+        for (let i = 0; i < data.length; i += 4) {
+          const y = Math.max(0, Math.min(255, Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])));
+          hist[y]++;
+          gray[i] = gray[i + 1] = gray[i + 2] = y;
+          gray[i + 3] = 255;
+        }
+        if (!contrast) return { data: gray, hist };
+        const pixels = w * h;
+        const loTarget = pixels * 0.02;
+        const hiTarget = pixels * 0.98;
+        let sum = 0, lo = 0, hi = 255;
+        for (let i = 0; i < 256; i++) { sum += hist[i]; if (sum >= loTarget) { lo = i; break; } }
+        sum = 0;
+        for (let i = 255; i >= 0; i--) { sum += hist[i]; if (sum >= pixels - hiTarget) { hi = i; break; } }
+        if (hi - lo < 24) { lo = 0; hi = 255; }
+        const scale = 255 / Math.max(1, hi - lo);
+        hist.fill(0);
+        for (let i = 0; i < gray.length; i += 4) {
+          const v = Math.max(0, Math.min(255, Math.round((gray[i] - lo) * scale)));
+          gray[i] = gray[i + 1] = gray[i + 2] = v;
+          hist[v]++;
+        }
+        return { data: gray, hist };
+      }
+
+      function otsuThreshold(hist, total) {
+        let sum = 0;
+        for (let i = 0; i < 256; i++) sum += i * hist[i];
+        let sumB = 0, wB = 0, maxVariance = -1, threshold = 128;
+        for (let t = 0; t < 256; t++) {
+          wB += hist[t];
+          if (!wB) continue;
+          const wF = total - wB;
+          if (!wF) break;
+          sumB += t * hist[t];
+          const meanB = sumB / wB;
+          const meanF = (sum - sumB) / wF;
+          const variance = wB * wF * (meanB - meanF) * (meanB - meanF);
+          if (variance > maxVariance) { maxVariance = variance; threshold = t; }
+        }
+        return threshold;
+      }
+
+      function binarize(grayData, w, h, threshold, adaptive) {
+        const out = new Uint8ClampedArray(grayData.length);
+        if (!adaptive) {
+          for (let i = 0; i < grayData.length; i += 4) {
+            const v = grayData[i] < threshold ? 0 : 255;
+            out[i] = out[i + 1] = out[i + 2] = v; out[i + 3] = 255;
+          }
+          return out;
+        }
+        // Integral image lets us adapt the threshold to illumination gradients from a projector.
+        const stride = w + 1;
+        const integral = new Uint32Array((w + 1) * (h + 1));
+        for (let y = 1; y <= h; y++) {
+          let rowSum = 0;
+          const srcRow = (y - 1) * w * 4;
+          const dstRow = y * stride;
+          const prevRow = (y - 1) * stride;
+          for (let x = 1; x <= w; x++) {
+            rowSum += grayData[srcRow + (x - 1) * 4];
+            integral[dstRow + x] = integral[prevRow + x] + rowSum;
+          }
+        }
+        const radius = Math.max(8, Math.round(Math.min(w, h) * 0.025));
+        for (let y = 0; y < h; y++) {
+          const y0 = Math.max(0, y - radius), y1 = Math.min(h, y + radius + 1);
+          for (let x = 0; x < w; x++) {
+            const x0 = Math.max(0, x - radius), x1 = Math.min(w, x + radius + 1);
+            const area = (x1 - x0) * (y1 - y0);
+            const sum = integral[y1 * stride + x1] - integral[y0 * stride + x1] - integral[y1 * stride + x0] + integral[y0 * stride + x0];
+            const px = (y * w + x) * 4;
+            const v = grayData[px] < (sum / area) - 6 ? 0 : 255;
+            out[px] = out[px + 1] = out[px + 2] = v; out[px + 3] = 255;
+          }
+        }
+        return out;
+      }
+
+      function decodeVariants(imageData, w, h) {
+        if (typeof window.jsQR !== 'function') {
+          setStatus('Не загрузился модуль распознавания QR');
+          return null;
+        }
+        // 1) Original color frame: jsQR performs its own thresholding and tries both polarities.
+        let result = window.jsQR(imageData.data, w, h, { inversionAttempts: 'attemptBoth' });
+        if (result) return result;
+
+        const grayResult = makeGray(imageData.data, w, h, false);
+        // 2) Grayscale + contrast stretch: reduces the influence of projector color tint.
+        result = window.jsQR(grayResult.data, w, h, { inversionAttempts: 'attemptBoth' });
+        if (result) return result;
+
+        const contrastResult = makeGray(imageData.data, w, h, true);
+        // 3) Otsu global threshold; useful when the white modules look cyan/blue.
+        const threshold = otsuThreshold(contrastResult.hist, w * h);
+        const binary = binarize(contrastResult.data, w, h, threshold, false);
+        result = window.jsQR(binary, w, h, { inversionAttempts: 'attemptBoth' });
+        if (result) return result;
+
+        // 4) Local adaptive threshold compensates for uneven brightness and faded projection.
+        const adaptive = binarize(grayResult.data, w, h, 0, true);
+        result = window.jsQR(adaptive, w, h, { inversionAttempts: 'attemptBoth' });
+        return result || null;
+      }
+
+      function scanLoop(now) {
+        if (!scanning || !video.videoWidth || !video.videoHeight) {
+          if (scanning) scanTimer = requestAnimationFrame(scanLoop);
+          return;
+        }
+        if (now - lastAttempt > 150) {
+          lastAttempt = now;
+          try {
+            const vw = video.videoWidth, vh = video.videoHeight;
+            // Sample up to ~1000 px across. For digital zoom, crop the center of the sensor frame.
+            const sampleScale = Math.min(1, 1000 / vw, 1000 / vh);
+            const sw = Math.max(1, Math.round(vw * sampleScale / digitalZoom));
+            const sh = Math.max(1, Math.round(vh * sampleScale / digitalZoom));
+            const sx = Math.round((vw - sw) / 2), sy = Math.round((vh - sh) / 2);
+            canvas.width = Math.max(1, Math.round(sw * (vw * sampleScale / sw)));
+            canvas.height = Math.max(1, Math.round(sh * (vh * sampleScale / sh)));
+            ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const result = decodeVariants(imageData, canvas.width, canvas.height);
+            if (result && result.data) onDetected(result.data);
+          } catch (_) {
+            // A transient frame/canvas error should not stop the next scan attempt.
+          }
+        }
+        if (scanning) scanTimer = requestAnimationFrame(scanLoop);
+      }
+
+      function onDetected(text) {
+        if (!scanning) return;
+        detectedText = String(text);
+        scanning = false;
+        if (scanTimer) cancelAnimationFrame(scanTimer);
+        scanTimer = 0;
+        stopCamera(); // Stop both decoding and the camera stream on a successful read.
+        setStatus('Готово — сканирование остановлено');
+        liveLabel.textContent = 'Код считан';
+        startBtn.classList.add('hidden');
+        controls.classList.add('hidden');
+        resultSection.classList.remove('hidden');
+        resultContent.replaceChildren();
+
+        try {
+          const parsed = new URL(detectedText);
+          if (parsed.protocol === 'https:' || parsed.protocol === 'http:') detectedUrl = parsed.href;
+        } catch (_) { detectedUrl = null; }
+
+        if (detectedUrl) {
+          const a = document.createElement('a');
+          a.className = 'qr-link';
+          a.href = detectedUrl;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.textContent = detectedUrl;
+          resultContent.appendChild(a);
+          openBtn.classList.remove('hidden');
+        } else {
+          resultContent.textContent = detectedText || '(пустой QR-код)';
+          const note = document.createElement('div');
+          note.className = 'subtitle';
+          note.textContent = 'Содержимое кода не является ссылкой HTTP(S).';
+          resultContent.appendChild(note);
+          openBtn.classList.add('hidden');
+        }
+      }
+
+      startBtn.addEventListener('click', () => {
+        if (stream) stopByButton();
+        else startCamera();
+      });
+      retryBtn.addEventListener('click', () => {
+        startBtn.classList.remove('hidden');
+        controls.classList.remove('hidden');
+        resultSection.classList.add('hidden');
+        startBtn.textContent = 'Включить камеру';
+        startCamera();
+      });
+      zoomSlider.addEventListener('input', () => { setZoom(zoomSlider.value); });
+      zoomMinus.addEventListener('click', () => {
+        const step = Number(zoomSlider.step) || 0.1;
+        setZoom(Math.max(Number(zoomSlider.min), activeZoom - step));
+      });
+      openBtn.addEventListener('click', () => {
+        if (detectedUrl) window.open(detectedUrl, '_blank', 'noopener,noreferrer');
+      });
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(detectedText);
+          copyBtn.textContent = 'Скопировано ✓';
+        } catch (_) {
+          const temp = document.createElement('textarea');
+          temp.value = detectedText;
+          temp.style.position = 'fixed'; temp.style.opacity = '0';
+          document.body.appendChild(temp); temp.select();
+          const ok = document.execCommand('copy'); temp.remove();
+          copyBtn.textContent = ok ? 'Скопировано ✓' : 'Не удалось скопировать';
+        }
+        setTimeout(() => { copyBtn.textContent = 'Копировать'; }, 1600);
+      });
+
+      // Initial action is deliberately user-triggered: mobile browsers require a permission gesture.
+      window.addEventListener('pagehide', stopCamera);
+    })();
+  </script>
+</body>
+</html>

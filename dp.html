@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Сканер QR-кодов</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #000; color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden; height: 100vh; width: 100vw;
+        }
+        #video {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover; z-index: 1;
+        }
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; justify-content: center; align-items: center;
+            z-index: 2; pointer-events: none;
+        }
+        .scan-region {
+            width: 70vw; height: 70vw; max-width: 300px; max-height: 300px;
+            border: 2px solid rgba(0, 255, 0, 0.6); border-radius: 16px;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+            transition: border-color 0.3s;
+        }
+        #result-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 10; padding: 20px; text-align: center; backdrop-filter: blur(5px);
+        }
+        #result-container.hidden { display: none; }
+        #result-title { font-size: 1.2rem; margin-bottom: 15px; color: #aaa; }
+        #result-link {
+            color: #4da6ff; word-break: break-all; margin-bottom: 30px;
+            font-size: 1.1rem; text-decoration: none; border-bottom: 1px dashed #4da6ff;
+        }
+        #retry-btn {
+            padding: 15px 40px; font-size: 1.1rem; background: #4da6ff;
+            border: none; color: #fff; border-radius: 30px; cursor: pointer;
+            font-weight: bold; transition: background 0.2s;
+        }
+        #retry-btn:active { background: #2a75b8; }
+        #controls {
+            position: absolute; bottom: 30px; width: 100%;
+            display: flex; justify-content: center; z-index: 3; padding: 0 20px;
+        }
+        #zoom { width: 80%; max-width: 300px; display: none; }
+        #canvas { display: none; }
+    </style>
+</head>
+<body>
+
+    <video id="video" playsinline autoplay muted></video>
+    <canvas id="canvas"></canvas>
+
+    <div class="overlay">
+        <div class="scan-region"></div>
+    </div>
+
+    <div id="controls">
+        <input type="range" id="zoom" min="1" max="5" step="0.1" value="1">
+    </div>
+
+    <div id="result-container" class="hidden">
+        <p id="result-title">Ссылка успешно отсканирована и отправлена на сервер:</p>
+        <a id="result-link" href="#" target="_blank"></a>
+        <button id="retry-btn">Повторить</button>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const resultContainer = document.getElementById('result-container');
+        const resultLink = document.getElementById('result-link');
+        const retryBtn = document.getElementById('retry-btn');
+        const zoomSlider = document.getElementById('zoom');
+        
+        let isScanning = false;
+        let stream = null;
+        let videoTrack = null;
+
+        let lastDetectedCode = null;
+        let confirmationCount = 0;
+        const REQUIRED_CONFIRMATIONS = 4;
+
+        function isValidUrl(string) {
+            try {
+                const url = new URL(string);
+                return url.protocol === "http:" || url.protocol === "https:";
+            } catch (_) {
+                return false;
+            }
+        }
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: 'environment',
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    }
+                });
+                
+                video.srcObject = stream;
+                video.setAttribute('playsinline', true);
+                video.play();
+                
+                videoTrack = stream.getVideoTracks()[0];
+
+                const capabilities = videoTrack.getCapabilities();
+                if (capabilities.zoom) {
+                    zoomSlider.min = capabilities.zoom.min || 1;
+                    zoomSlider.max = capabilities.zoom.max || 5;
+                    zoomSlider.step = capabilities.zoom.step || 0.1;
+                    zoomSlider.value = capabilities.zoom.min || 1;
+                    zoomSlider.style.display = 'block';
+                }
+
+                isScanning = true;
+                requestAnimationFrame(tick);
+            } catch (err) {
+                console.error("Ошибка доступа к камере:", err);
+                alert("Не удалось получить доступ к камере. Убедитесь, что вы открываете страницу по HTTPS и разрешили доступ.");
+            }
+        }
+
+        function tick() {
+            if (!isScanning) return;
+
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                const MAX_WIDTH = 800; 
+                let scale = 1;
+                if (video.videoWidth > MAX_WIDTH) {
+                    scale = MAX_WIDTH / video.videoWidth;
+                }
+                
+                canvas.width = video.videoWidth * scale;
+                canvas.height = video.videoHeight * scale;
+
+                ctx.filter = 'grayscale(1) contrast(2.5) brightness(1.1)';
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                const cropWidth = canvas.width * 0.7;
+                const cropHeight = canvas.height * 0.7;
+                const cropX = (canvas.width - cropWidth) / 2;
+                const cropY = (canvas.height - cropHeight) / 2;
+
+                const imageData = ctx.getImageData(cropX, cropY, cropWidth, cropHeight);
+                
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: "attemptBoth",
+                });
+
+                if (code && code.data && isValidUrl(code.data)) {
+                    if (code.data === lastDetectedCode) {
+                        confirmationCount++;
+                        if (confirmationCount >= REQUIRED_CONFIRMATIONS) {
+                            handleSuccess(code.data);
+                            return;
+                        }
+                    } else {
+                        lastDetectedCode = code.data;
+                        confirmationCount = 1;
+                    }
+                } else {
+                    if (confirmationCount > 0) {
+                        confirmationCount--;
+                        if (confirmationCount === 0) lastDetectedCode = null;
+                    }
+                }
+            }
+            requestAnimationFrame(tick);
+        }
+
+        async function handleSuccess(url) {
+            isScanning = false;
+            if (navigator.vibrate) navigator.vibrate(200);
+
+            resultLink.href = url;
+            resultLink.textContent = url;
+            resultContainer.classList.remove('hidden');
+
+            // ==========================================
+            // ОТПРАВКА НА СЕРВЕР ОТКЛЮЧЕНА (GitHub Pages не поддерживает Python)
+            // ==========================================
+            console.log("Отсканирована ссылка:", url);
+            
+            /* 
+            // Если вы хотите отправлять данные на сторонний сервер (например, Vercel), 
+            // раскомментируйте этот блок и укажите полный URL вашего API:
+            
+            try {
+                const response = await fetch('https://ваш-сторонний-сервер.ру/api/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scannedUrl: url })
+                });
+                const data = await response.json();
+                console.log("Ответ сервера:", data);
+            } catch (err) {
+                console.error('Ошибка отправки на сервер:', err);
+            }
+            */
+        }
+
+        retryBtn.addEventListener('click', () => {
+            resultContainer.classList.add('hidden');
+            resultLink.href = '#';
+            resultLink.textContent = '';
+            
+            lastDetectedCode = null;
+            confirmationCount = 0;
+            
+            isScanning = true;
+            requestAnimationFrame(tick);
+        });
+
+        zoomSlider.addEventListener('input', (e) => {
+            const zoom = parseFloat(e.target.value);
+            if (videoTrack) {
+                videoTrack.applyConstraints({ advanced: [{ zoom: zoom }] })
+                    .catch(err => console.log("Зум не поддерживается:", err));
+            }
+        });
+
+        startCamera();
+    </script>
+</body>
+</html>
